@@ -101,16 +101,16 @@ extern "C" {
 #define DSI_RESET_GPIO_PIN              GPIO_PIN_5
 #define DSI_RESET_GPIO_CLOCK_ENABLE()   __HAL_RCC_GPIOD_CLK_ENABLE()
 
-#define VSYNC        1
-#define VBP          12
-#define VFP          50
-#define VACT         481
-#define HSYNC        2
-#define HBP          1
-#define HFP          1
+#define VSYNC        10         // Vertical sync
+#define VBP          20
+#define VFP          20
+#define VACT         851
+#define HSYNC        10
+#define HBP          30
+#define HFP          30
 #define HACT         480
-#define LCD_WIDTH    480
-#define LCD_HEIGHT   480
+#define LCD_WIDTH    480U
+#define LCD_HEIGHT   854U
 
 #define PIXEL_PER_LINE    768U
 #define BYTE_PER_PIXEL    4U   /* ARGB8888 */
@@ -160,7 +160,7 @@ typedef struct
 /** @defgroup STM32U5x9J_DISCOVERY_LCD_Exported_Variables LCD Exported Variables
   * @{
   */
-extern GFXMMU_HandleTypeDef hlcd_gfxmmu;
+
 extern LTDC_HandleTypeDef   hlcd_ltdc;
 extern DSI_HandleTypeDef    hlcd_dsi;
 extern DMA2D_HandleTypeDef  hlcd_dma2d;

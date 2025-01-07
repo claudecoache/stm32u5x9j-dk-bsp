@@ -86,12 +86,12 @@
   * @{
   */
 /* Physical frame buffer for background and foreground layers */
-/* 480*480 pixels with 32bpp - 20% */
+/* 480*854 pixels with 32bpp */
 #if defined ( __ICCARM__ )  /* IAR Compiler */
 #pragma data_alignment = 16
 static uint32_t              PhysFrameBuffer[184320];
 #elif defined (__GNUC__)    /* GNU Compiler */
-static uint32_t              PhysFrameBuffer[184320] __attribute__((aligned(16)));
+static uint32_t              PhysFrameBuffer[LCD_WIDTH*LCD_HEIGHT] __attribute__((aligned(16)));
 #else                       /* ARM Compiler */
 __align(16) static uint32_t  PhysFrameBuffer[164072];
 #endif /* IAR Compiler */
@@ -112,7 +112,6 @@ static uint32_t LcdDsi_IsMspCbValid[LCD_INSTANCES_NBR] = {0};
 static uint32_t LcdDma2d_IsMspCbValid[LCD_INSTANCES_NBR] = {0};
 #endif /* (USE_HAL_DMA2D_REGISTER_CALLBACKS == 1) */
 
-GFXMMU_HandleTypeDef      hlcd_gfxmmu = {0};
 LTDC_HandleTypeDef        hlcd_ltdc   = {0};
 DSI_HandleTypeDef         hlcd_dsi    = {0};
 DMA2D_HandleTypeDef       hlcd_dma2d  = {0};
@@ -130,8 +129,6 @@ static int32_t LCD_DeInit(void);
 static int32_t LCD_ConvertLineToARGB8888(uint32_t *pSrc, uint32_t *pDst, uint32_t xSize, uint32_t ColorMode);
 
 static void    LCD_Set_Default_Clock(void);
-static void    GFXMMU_MspInit(GFXMMU_HandleTypeDef *hgfxmmu);
-static void    GFXMMU_MspDeInit(GFXMMU_HandleTypeDef *hgfxmmu);
 static void    LTDC_MspInit(LTDC_HandleTypeDef *hltdc);
 static void    LTDC_MspDeInit(LTDC_HandleTypeDef *hltdc);
 static void    DSI_MspInit(DSI_HandleTypeDef *hdsi);
@@ -783,7 +780,7 @@ __weak HAL_StatusTypeDef MX_LTDC_ConfigLayer(LTDC_HandleTypeDef *hltdc, uint32_t
   LayerCfg.Alpha0          = 0; /* NU default value */
   LayerCfg.BlendingFactor1 = LTDC_BLENDING_FACTOR1_PAxCA; /* Not Used: default value */
   LayerCfg.BlendingFactor2 = LTDC_BLENDING_FACTOR2_PAxCA; /* Not Used: default value */
-  LayerCfg.FBStartAdress   = GFXMMU_VIRTUAL_BUFFER0_BASE;
+  LayerCfg.FBStartAdress   = (uint32_t)&PhysFrameBuffer[0];
   LayerCfg.ImageWidth      = PIXEL_PER_LINE; /* Number of pixels per line in virtual frame buffer */
   LayerCfg.ImageHeight     = LCD_HEIGHT;
   LayerCfg.Backcolor.Red   = 0; /* Not Used: default value */
@@ -1204,44 +1201,6 @@ static int32_t LCD_Init(void)
   DSI_PHY_TimerTypeDef     PhyTimers = {0};
   DSI_HOST_TimeoutTypeDef  HostTimeouts = {0};
 
-  /***************/
-  /* GFXMMU init */
-  /***************/
-#if (USE_HAL_GFXMMU_REGISTER_CALLBACKS == 0)
-  GFXMMU_MspInit(&hlcd_gfxmmu);
-#else
-  /* Register the GFXMMU MSP Callbacks */
-  if (LcdGfxmmu_IsMspCbValid[0] == 0U)
-  {
-    if (BSP_LCD_GFXMMU_RegisterDefaultMspCallbacks(0) != BSP_ERROR_NONE)
-    {
-      status = BSP_ERROR_PERIPH_FAILURE;
-    }
-  }
-#endif /* (USE_HAL_GFXMMU_REGISTER_CALLBACKS == 0) */
-
-  if (status == BSP_ERROR_NONE)
-  {
-    /* GFXMMU peripheral initialization */
-    if (MX_GFXMMU_Init(&hlcd_gfxmmu) != HAL_OK)
-    {
-      status = BSP_ERROR_PERIPH_FAILURE;
-    }
-    /* Initialize LUT */
-    else if (HAL_GFXMMU_ConfigLut(&hlcd_gfxmmu, 0, LCD_WIDTH, (uint32_t)&gfxmmu_lut_config_argb8888) != HAL_OK)
-    {
-      status = BSP_ERROR_PERIPH_FAILURE;
-    }
-    else
-    {
-      /* Disable non visible lines : from line 480 to 1023 */
-      if (HAL_OK != HAL_GFXMMU_DisableLutLines(&hlcd_gfxmmu, LCD_WIDTH, 544))
-      {
-        status = BSP_ERROR_PERIPH_FAILURE;
-      }
-    }
-  }
-
   /************/
   /* DSI init */
   /************/
@@ -1284,6 +1243,10 @@ static int32_t LCD_Init(void)
     PhyTimers.StopWaitTime        = 7;
 
     if (HAL_DSI_ConfigPhyTimer(&hlcd_dsi, &PhyTimers) != HAL_OK)
+    {
+      return 6;
+    }
+    if (HAL_DSI_SetLanePinsConfiguration(&hlcd_dsi, DSI_SWAP_LANE_PINS, DSI_CLOCK_LANE, ENABLE) != HAL_OK)
     {
       return 6;
     }
@@ -1359,92 +1322,185 @@ static int32_t LCD_Init(void)
       return 8;
     }
 
-
-    /* CMD Mode */
-    uint8_t InitParam1[3] = {0xFF, 0x83, 0x79};
-    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, 3, 0xB9, InitParam1) != HAL_OK) { ErrorNumber++; }
-
-    /* SETPOWER */
-    uint8_t InitParam2[16] = {0x44, 0x1C, 0x1C, 0x37, 0x57, 0x90, 0xD0,
-                              0xE2, 0x58, 0x80, 0x38, 0x38, 0xF8, 0x33, 0x34, 0x42
-                             };
-    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, 16, 0xB1, InitParam2) != HAL_OK) { ErrorNumber++; }
-
-    /* SETDISP */
-    uint8_t InitParam3[9] = {0x80, 0x14, 0x0C, 0x30, 0x20, 0x50, 0x11, 0x42, 0x1D};
-    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, 9, 0xB2, InitParam3) != HAL_OK) { ErrorNumber++; }
-
-    /* Set display cycle timing */
-    uint8_t InitParam4[10] = {0x01, 0xAA, 0x01, 0xAF, 0x01, 0xAF, 0x10, 0xEA, 0x1C, 0xEA};
-    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, 10, 0xB4, InitParam4) != HAL_OK) { ErrorNumber++; }
-
-    /* SETVCOM */
-    uint8_t InitParam5[4] = {00, 00, 00, 0xC0};
-    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, 4, 0xC7, InitParam5) != HAL_OK) { ErrorNumber++; }
-
-    /* Set Panel Related Registers */
-    if (HAL_DSI_ShortWrite(&hlcd_dsi, 0, DSI_DCS_SHORT_PKT_WRITE_P1, 0xCC, 0x02) != HAL_OK) { ErrorNumber++; }
-
-    if (HAL_DSI_ShortWrite(&hlcd_dsi, 0, DSI_DCS_SHORT_PKT_WRITE_P1, 0xD2, 0x77) != HAL_OK) { ErrorNumber++; }
-
-    uint8_t InitParam6[37] = {0x00, 0x07, 0x00, 0x00, 0x00, 0x08, 0x08, 0x32, 0x10, 0x01, 0x00, 0x01, 0x03, 0x72,
-                              0x03, 0x72, 0x00, 0x08, 0x00, 0x08, 0x33, 0x33, 0x05, 0x05, 0x37, 0x05, 0x05, 0x37,
-                              0x0A, 0x00, 0x00, 0x00, 0x0A, 0x00, 0x01, 0x00, 0x0E
-                             };
-    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, 37, 0xD3, InitParam6) != HAL_OK) { ErrorNumber++; }
-
-    uint8_t InitParam7[34] = {0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x19, 0x19, 0x18, 0x18, 0x18, 0x18, 0x19,
-                              0x19, 0x01, 0x00, 0x03, 0x02, 0x05, 0x04, 0x07, 0x06, 0x23, 0x22, 0x21, 0x20, 0x18, 0x18,
-                              0x18, 0x18, 0x00, 0x00
-                             };
-    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, 34, 0xD5, InitParam7) != HAL_OK) { ErrorNumber++; }
-
-    uint8_t InitParam8[32] = {0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x19, 0x19, 0x18, 0x18, 0x19, 0x19, 0x18,
-                              0x18, 0x06, 0x07, 0x04, 0x05, 0x02, 0x03, 0x00, 0x01, 0x20, 0x21, 0x22, 0x23, 0x18, 0x18,
-                              0x18, 0x18
-                             };
-    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, 35, 0xD6, InitParam8) != HAL_OK) { ErrorNumber++; }
-
-    /* SET GAMMA */
-    uint8_t InitParam9[42] = {0x00, 0x16, 0x1B, 0x30, 0x36, 0x3F, 0x24, 0x40, 0x09, 0x0D, 0x0F, 0x18, 0x0E, 0x11, 0x12,
-                              0x11, 0x14, 0x07, 0x12, 0x13, 0x18, 0x00, 0x17, 0x1C, 0x30, 0x36, 0x3F, 0x24, 0x40, 0x09,
-                              0x0C, 0x0F, 0x18, 0x0E, 0x11, 0x14, 0x11, 0x12, 0x07, 0x12, 0x14, 0x18
-                             };
-    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, 42, 0xE0, InitParam9) != HAL_OK) { ErrorNumber++; }
-
-    uint8_t InitParam10[3] = {0x2C, 0x2C, 00};
-    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, 3, 0xB6, InitParam10) != HAL_OK) { ErrorNumber++; }
-
-    if (HAL_DSI_ShortWrite(&hlcd_dsi, 0, DSI_DCS_SHORT_PKT_WRITE_P1, 0xBD, 0x00) != HAL_OK) { ErrorNumber++; }
-
-    uint8_t InitParam11[] = {0x01, 0x00, 0x07, 0x0F, 0x16, 0x1F, 0x27, 0x30, 0x38, 0x40, 0x47, 0x4E, 0x56, 0x5D, 0x65,
-                             0x6D, 0x74, 0x7D, 0x84, 0x8A, 0x90, 0x99, 0xA1, 0xA9, 0xB0, 0xB6, 0xBD, 0xC4, 0xCD, 0xD4,
-                             0xDD, 0xE5, 0xEC, 0xF3, 0x36, 0x07, 0x1C, 0xC0, 0x1B, 0x01, 0xF1, 0x34, 0x00
-                            };
-    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, 42, 0xC1, InitParam11) != HAL_OK) { ErrorNumber++; }
-
-    if (HAL_DSI_ShortWrite(&hlcd_dsi, 0, DSI_DCS_SHORT_PKT_WRITE_P1, 0xBD, 0x01) != HAL_OK) { ErrorNumber++; }
-
-    uint8_t InitParam12[] = {0x00, 0x08, 0x0F, 0x16, 0x1F, 0x28, 0x31, 0x39, 0x41, 0x48, 0x51, 0x59, 0x60, 0x68, 0x70,
-                             0x78, 0x7F, 0x87, 0x8D, 0x94, 0x9C, 0xA3, 0xAB, 0xB3, 0xB9, 0xC1, 0xC8, 0xD0, 0xD8, 0xE0,
-                             0xE8, 0xEE, 0xF5, 0x3B, 0x1A, 0xB6, 0xA0, 0x07, 0x45, 0xC5, 0x37, 0x00
-                            };
-    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, 42, 0xC1, InitParam12) != HAL_OK) { ErrorNumber++; }
-
-    if (HAL_DSI_ShortWrite(&hlcd_dsi, 0, DSI_DCS_SHORT_PKT_WRITE_P1, 0xBD, 0x02) != HAL_OK) { ErrorNumber++; }
-
-    uint8_t InitParam13[42] = {0x00, 0x09, 0x0F, 0x18, 0x21, 0x2A, 0x34, 0x3C, 0x45, 0x4C, 0x56, 0x5E, 0x66, 0x6E,
-                               0x76, 0x7E, 0x87, 0x8E, 0x95, 0x9D, 0xA6, 0xAF, 0xB7, 0xBD, 0xC5, 0xCE, 0xD5, 0xDF,
-                               0xE7, 0xEE, 0xF4, 0xFA, 0xFF, 0x0C, 0x31, 0x83, 0x3C, 0x5B, 0x56, 0x1E, 0x5A, 0xFF
-                              };
-    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, 42, 0xC1, InitParam13) != HAL_OK) { ErrorNumber++; }
-
-    if (HAL_DSI_ShortWrite(&hlcd_dsi, 0, DSI_DCS_SHORT_PKT_WRITE_P1, 0xBD, 0x00) != HAL_OK) { ErrorNumber++; }
-
-    /* Exit Sleep Mode*/
-    if (HAL_DSI_ShortWrite(&hlcd_dsi, 0, DSI_DCS_SHORT_PKT_WRITE_P0, 0x11, 0x00) != HAL_OK) { ErrorNumber++; }
+    // Sleep out
+    if (HAL_DSI_ShortWrite(&hlcd_dsi, 0, DSI_DCS_SHORT_PKT_WRITE_P1, 0x11, 0x00) != HAL_OK) { ErrorNumber++; };
 
     HAL_Delay(120);
+
+    // Enable command 2 bank 3
+    uint8_t data_array1[] = {0x77,0x01,0x00,0x00,0x13};
+    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, sizeof(data_array1), 0xFF, data_array1) != HAL_OK)  { ErrorNumber++; };
+
+    // Unknown command, given by supplyer
+    if (HAL_DSI_ShortWrite(&hlcd_dsi, 0, DSI_DCS_SHORT_PKT_WRITE_P1, 0xEF, 0x08) != HAL_OK)  { ErrorNumber++; };
+
+    // Select command 2 bank 0
+    uint8_t data_array2[] = {0x77,0x01,0x00,0x00,0x10};
+    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, sizeof(data_array2), 0xFF, data_array2) != HAL_OK)  { ErrorNumber++; };
+
+    // Display line setting
+    uint8_t data_array3[] = {0xE9,0x03};
+    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, sizeof(data_array3), 0xC0, data_array3) != HAL_OK)  { ErrorNumber++; };
+
+    // Porch control
+    uint8_t data_array4[] = {0x11,0x02};
+    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, sizeof(data_array4), 0xC1, data_array4) != HAL_OK)  { ErrorNumber++; };
+
+    // Inversion selection & Frame Rate Control
+    uint8_t data_array5[] = {0x07,0x06};
+    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, sizeof(data_array5), 0xC2, data_array5) != HAL_OK)  { ErrorNumber++; };
+
+    // Unknown command
+    if (HAL_DSI_ShortWrite(&hlcd_dsi, 0, DSI_DCS_SHORT_PKT_WRITE_P1, 0xCC, 0x18) != HAL_OK)  { ErrorNumber++; };
+
+    // Positive Voltage Gamma Control
+    uint8_t data_array6[] = {0x00, 0x0D, 0x14, 0x0D, 0x10, 0x05, 0x02, 0x08, 0x08, 0x1E, 0x05, 0x13, 0x11, 0xA3, 0x29, 0x18};
+    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, sizeof(data_array6), 0xB0, data_array6) != HAL_OK)  { ErrorNumber++; };
+
+    // Negative Voltage Gamma Control
+    uint8_t data_array7[] = {0x00, 0x0C, 0x14, 0x0C, 0x10, 0x05, 0x03, 0x08, 0x07, 0x20, 0x05, 0x13, 0x11, 0xA4, 0x29, 0x18};
+    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, sizeof(data_array7), 0xB1, data_array7) != HAL_OK)  { ErrorNumber++; };
+
+    //HAL_DSI_ShortWrite(&hlcd_dsi, 1, DSI_DCS_SHORT_PKT_WRITE_P1, 0xFF, 0x77);
+
+    // Select command 2 bank 1
+    uint8_t data_array8[] = {0x77,0x01,0x00,0x00,0x11};//mike1025
+    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, sizeof(data_array8), 0xFF, data_array8) != HAL_OK)  { ErrorNumber++; };//mike1025
+
+    // Vop Amplitude setting
+    if (HAL_DSI_ShortWrite(&hlcd_dsi, 0, DSI_DCS_SHORT_PKT_WRITE_P1, 0xB0, 0x6C) != HAL_OK)  { ErrorNumber++; };
+
+    // VCOM amplitude setting
+    if (HAL_DSI_ShortWrite(&hlcd_dsi, 0, DSI_DCS_SHORT_PKT_WRITE_P1, 0xB1, 0x4D) != HAL_OK)  { ErrorNumber++; };
+
+    // VGH Voltage setting
+    if (HAL_DSI_ShortWrite(&hlcd_dsi, 0, DSI_DCS_SHORT_PKT_WRITE_P1, 0xB2, 0x89) != HAL_OK)  { ErrorNumber++; };
+
+    // TEST Command Setting
+    if (HAL_DSI_ShortWrite(&hlcd_dsi, 0, DSI_DCS_SHORT_PKT_WRITE_P1, 0xB3, 0x80) != HAL_OK)  { ErrorNumber++; };
+
+    // VGL Voltage setting
+    if (HAL_DSI_ShortWrite(&hlcd_dsi, 0, DSI_DCS_SHORT_PKT_WRITE_P1, 0xB5, 0x4E) != HAL_OK)  { ErrorNumber++; };
+
+    // Power control 1
+    if (HAL_DSI_ShortWrite(&hlcd_dsi, 0, DSI_DCS_SHORT_PKT_WRITE_P1, 0xB7, 0x85) != HAL_OK)  { ErrorNumber++; };
+
+    // Power control 2
+    if (HAL_DSI_ShortWrite(&hlcd_dsi, 0, DSI_DCS_SHORT_PKT_WRITE_P1, 0xB8, 0x20) != HAL_OK)  { ErrorNumber++; };
+
+    // Power Control 3
+    uint8_t data_array9[] = {0x00,0x13};//mike1025
+    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, sizeof(data_array9), 0xB9, data_array9) != HAL_OK)  { ErrorNumber++; };//mike1025
+
+    // Unknown command in command 2 BK1
+    if (HAL_DSI_ShortWrite(&hlcd_dsi, 0, DSI_DCS_SHORT_PKT_WRITE_P1, 0xC0, 0x09) != HAL_OK)  { ErrorNumber++; };
+
+    // Source pre_drive timing set1
+    if (HAL_DSI_ShortWrite(&hlcd_dsi, 0, DSI_DCS_SHORT_PKT_WRITE_P1, 0xC1, 0x78) != HAL_OK)  { ErrorNumber++; };
+
+    // Source pre_drive timing set2
+    if (HAL_DSI_ShortWrite(&hlcd_dsi, 0, DSI_DCS_SHORT_PKT_WRITE_P1, 0xC2, 0x78) != HAL_OK)  { ErrorNumber++; };
+
+    // MIPI Setting 1
+    if (HAL_DSI_ShortWrite(&hlcd_dsi, 0, DSI_DCS_SHORT_PKT_WRITE_P1, 0xD0, 0x88) != HAL_OK)  { ErrorNumber++; };
+
+    HAL_Delay(10);
+
+    // Unknown command in command 2 BK1
+    uint8_t data_array10[] = {0x00, 0x00, 0x02};
+    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, sizeof(data_array10), 0xE0, data_array10) != HAL_OK)  { ErrorNumber++; };
+
+    uint8_t data_array11[] = {0x08, 0x00, 0x0A, 0x00, 0x07, 0x00, 0x09, 0x00, 0x00, 0x33, 0x33};
+    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, sizeof(data_array11), 0xE1, data_array11) != HAL_OK)  { ErrorNumber++; };
+
+    uint8_t data_array12[] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, sizeof(data_array12), 0xE2, data_array12) != HAL_OK)  { ErrorNumber++; };
+
+    uint8_t data_array13[] = {0x00, 0x00, 0x33, 0x33};
+    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, sizeof(data_array13), 0xE3, data_array13) != HAL_OK)  { ErrorNumber++; };
+
+    uint8_t data_array14[] = {0x44, 0x44};
+    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, sizeof(data_array14), 0xE4, data_array14) != HAL_OK)  { ErrorNumber++; };
+
+    uint8_t data_array15[] = {0x0E, 0x60, 0xA0, 0xA0, 0x10, 0x60, 0xA0, 0xA0, 0x0A, 0x60, 0xA0, 0xA0, 0x0C, 0x60, 0xA0, 0xA0};
+    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, sizeof(data_array15), 0xE5, data_array15) != HAL_OK)  { ErrorNumber++; };
+
+    uint8_t data_array16[] = {0x00, 0x00, 0x33, 0x33};
+    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, sizeof(data_array16), 0xE6, data_array16) != HAL_OK)  { ErrorNumber++; };
+
+    uint8_t data_array17[] = {0x44, 0x44};
+    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, sizeof(data_array17), 0xE7, data_array17) != HAL_OK)  { ErrorNumber++; };
+
+    uint8_t data_array18[] = {0x0D, 0x60, 0xA0, 0xA0, 0x0F, 0x60, 0xA0, 0xA0, 0x09, 0x60, 0xA0, 0xA0, 0x0B, 0x60, 0xA0, 0xA0};
+    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, sizeof(data_array18), 0xE8, data_array18)  != HAL_OK)  { ErrorNumber++; };
+
+    uint8_t data_array19[] = {0x02, 0x01, 0xE4, 0xE4, 0x44, 0x00, 0x40};
+    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, sizeof(data_array19), 0xEB, data_array19) != HAL_OK)  { ErrorNumber++; };
+
+    uint8_t data_array20[] = {0x02, 0x01};
+    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, sizeof(data_array20), 0xEC, data_array20) != HAL_OK)  { ErrorNumber++; };
+
+    uint8_t data_array21[] = {0xAB, 0x89, 0x76, 0x54, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x10, 0x45, 0x67, 0x98, 0xBA};
+    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, sizeof(data_array21), 0xED, data_array21) != HAL_OK)  { ErrorNumber++; };
+
+    uint8_t data_array22[] = {0x08, 0x08, 0x08, 0x45, 0x3F, 0x54};
+    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, sizeof(data_array22), 0xEF, data_array22) != HAL_OK)  { ErrorNumber++; };
+
+    uint8_t data_array23[] = {0x77,0x01,0x00,0x00,0x13};
+    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, sizeof(data_array23), 0xFF, data_array23) != HAL_OK)  { ErrorNumber++; };
+
+    uint8_t data_array24[] = {0x00,0x0E};
+    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, sizeof(data_array24), 0xE8, data_array24) != HAL_OK)  { ErrorNumber++; };
+
+    uint8_t data_array25[] = {0x77,0x01,0x00,0x00,0x00};
+    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, sizeof(data_array25), 0xFF, data_array25) != HAL_OK)  { ErrorNumber++; };
+
+    //HAL_DSI_ShortWrite(&hlcd_dsi, 1, DSI_DCS_SHORT_PKT_WRITE_P1, 0xFF, 0x77);
+
+    if (HAL_DSI_ShortWrite(&hlcd_dsi, 0, DSI_DCS_SHORT_PKT_WRITE_P0, 0x11,0x00) != HAL_OK)  { ErrorNumber++; };
+
+    HAL_Delay(120);
+
+    uint8_t data_array26[] = {0x77,0x01,0x00,0x00,0x13};
+    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, sizeof(data_array26), 0xFF, data_array26) != HAL_OK)  { ErrorNumber++; };
+
+    uint8_t data_array27[] = {0x00,0x0C};
+    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, sizeof(data_array27), 0xE8, data_array27) != HAL_OK)  { ErrorNumber++; };
+
+    HAL_Delay(10);
+
+    uint8_t data_array29[] = {0x00,0x00};
+    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, sizeof(data_array29), 0xE8, data_array29) != HAL_OK)  { ErrorNumber++; };
+
+    uint8_t data_array30[] = {0x16,0x7C};
+    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, sizeof(data_array30), 0xE6, data_array30) != HAL_OK)  { ErrorNumber++; };
+
+    uint8_t data_array31[] = {0x77,0x01,0x00,0x00,0x00};
+    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, sizeof(data_array31), 0xFF, data_array31) != HAL_OK)  { ErrorNumber++; };
+
+    if (HAL_DSI_ShortWrite(&hlcd_dsi, 0, DSI_DCS_SHORT_PKT_WRITE_P0, 0x29,0x00) != HAL_OK)  { ErrorNumber++; };
+
+#if 0
+    /*
+     * Added to have the same sequence as the test box
+     */
+    if (HAL_DSI_ShortWrite(&hlcd_dsi, 0, DSI_MAX_RETURN_PKT_SIZE, 0x01,0x00) != HAL_OK)  { ErrorNumber++; };
+    //HAL_DSI_ShortWrite(&hlcd_dsi, 0, 0x11, 0x00, 0x00);
+    if (HAL_DSI_ShortWrite(&hlcd_dsi, 0, DSI_DCS_SHORT_PKT_WRITE_P1, 0x11, 0x00) != HAL_OK)  { ErrorNumber++; };
+    if (HAL_DSI_ShortWrite(&hlcd_dsi, 0, DSI_MAX_RETURN_PKT_SIZE, 0x01,0x00) != HAL_OK)  { ErrorNumber++; };
+    //HAL_DSI_ShortWrite(&hlcd_dsi, 0, 0x11, 0x00, 0x00);                        // Sync event
+    if (HAL_DSI_ShortWrite(&hlcd_dsi, 0, DSI_DCS_SHORT_PKT_WRITE_P0, 0x11, 0x00) != HAL_OK)  { ErrorNumber++; };   // Sleep out
+    if (HAL_DSI_ShortWrite(&hlcd_dsi, 0, DSI_DCS_SHORT_PKT_WRITE_P0, 0x29, 0x00) != HAL_OK)  { ErrorNumber++; };   // Display ON
+    if (HAL_DSI_ShortWrite(&hlcd_dsi, 0, 0x32, 0x00,0x00) != HAL_OK)  { ErrorNumber++; };                          // Turn on peripheral command
+#endif
+
+    //BIST MODE -- these are added by manufacturer
+#if 0
+    uint8_t data_array32[] = {0x77,0x01,0x00,0x00,0x12};
+    if (HAL_DSI_LongWrite(&hlcd_dsi, 0, DSI_DCS_LONG_PKT_WRITE, sizeof(data_array32), 0xFF, data_array32) != HAL_OK)  { ErrorNumber++; };
+    if (HAL_DSI_ShortWrite(&hlcd_dsi, 0, DSI_DCS_SHORT_PKT_WRITE_P1, 0xD1, 0x81) != HAL_OK)  { ErrorNumber++; };//bist mode ON
+    if (HAL_DSI_ShortWrite(&hlcd_dsi, 0, DSI_DCS_SHORT_PKT_WRITE_P1, 0xD2, 0x08) != HAL_OK)  { ErrorNumber++; };//color bar
+#endif
 
     /* Display On */
     if (HAL_DSI_ShortWrite(&hlcd_dsi, 0, DSI_DCS_SHORT_PKT_WRITE_P0, 0x29, 0x00) != HAL_OK) { ErrorNumber++; }
@@ -1506,15 +1562,6 @@ static int32_t LCD_DeInit(void)
 #if (USE_HAL_LTDC_REGISTER_CALLBACKS == 0)
   LTDC_MspDeInit(&hlcd_ltdc);
 #endif /* (USE_HAL_LTDC_REGISTER_CALLBACKS == 0) */
-
-  /* De-initialize GFXMMU */
-  if (HAL_GFXMMU_DeInit(&hlcd_gfxmmu) != HAL_OK)
-  {
-    ErrorNumber++;
-  }
-#if (USE_HAL_GFXMMU_REGISTER_CALLBACKS == 0)
-  GFXMMU_MspDeInit(&hlcd_gfxmmu);
-#endif /* (USE_HAL_GFXMMU_REGISTER_CALLBACKS == 0) */
 
   if (ErrorNumber != 0U)
   {
@@ -1622,41 +1669,6 @@ void LCD_Set_Default_Clock(void)
 }
 
 /**
-  * @brief  Initialize GFXMMU MSP.
-  * @param  hgfxmmu GFXMMU handle
-  * @retval None
-  */
-static void GFXMMU_MspInit(GFXMMU_HandleTypeDef *hgfxmmu)
-{
-  /* Prevent unused argument(s) compilation warning */
-  UNUSED(hgfxmmu);
-
-  /* GFXMMU clock enable */
-  __HAL_RCC_GFXMMU_CLK_ENABLE();
-
-  /* Enable GFXMMU interrupt */
-  HAL_NVIC_SetPriority(GFXMMU_IRQn, BSP_LCD_GFXMMU_IT_PRIORITY, 0);
-  HAL_NVIC_EnableIRQ(GFXMMU_IRQn);
-}
-
-/**
-  * @brief  De-Initialize GFXMMU MSP.
-  * @param  hgfxmmu GFXMMU handle
-  * @retval None
-  */
-static void GFXMMU_MspDeInit(GFXMMU_HandleTypeDef *hgfxmmu)
-{
-  /* Prevent unused argument(s) compilation warning */
-  UNUSED(hgfxmmu);
-
-  /* Disable GFXMMU interrupt */
-  HAL_NVIC_DisableIRQ(GFXMMU_IRQn);
-
-  /* GFXMMU clock disable */
-  __HAL_RCC_GFXMMU_CLK_DISABLE();
-}
-
-/**
   * @brief  Initialize LTDC MSP.
   * @param  hltdc LTDC handle
   * @retval None
@@ -1705,8 +1717,6 @@ static void DSI_MspInit(DSI_HandleTypeDef *hdsi)
   RCC_PeriphCLKInitTypeDef  PLL3InitPeriph = {0};
   GPIO_InitTypeDef          GPIO_InitStruct  = {0};
 
-  UNUSED(hdsi);
-
   /* Enable GPIOI & GPIOD clocks */
   __HAL_RCC_GPIOD_CLK_ENABLE();
   __HAL_RCC_GPIOI_CLK_ENABLE();
@@ -1719,11 +1729,12 @@ static void DSI_MspInit(DSI_HandleTypeDef *hdsi)
   HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
 
   /* Configure LCD Backlight Pin */
-  GPIO_InitStruct.Mode  = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull  = GPIO_PULLUP;
+  GPIO_InitStruct.Mode  = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pin   = GPIO_PIN_6;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOI, &GPIO_InitStruct);
+
+  HAL_GPIO_WritePin(GPIOI, GPIO_PIN_6, GPIO_PIN_SET);
 
   /** ################ Set DSI clock to D-PHY source clock ################## **/
 
@@ -1745,6 +1756,8 @@ static void DSI_MspInit(DSI_HandleTypeDef *hdsi)
   PLL3InitPeriph.PLL3.PLL3ClockOut = RCC_PLL3_DIVR | RCC_PLL3_DIVP;
   PLL3InitPeriph.PLL3.PLL3Source = RCC_PLLSOURCE_HSE;
   (void)HAL_RCCEx_PeriphCLKConfig(&PLL3InitPeriph);
+
+  //HAL_DSI_SetLanePinsConfiguration (hdsi);
 
   /** ######################################################################### **/
 
