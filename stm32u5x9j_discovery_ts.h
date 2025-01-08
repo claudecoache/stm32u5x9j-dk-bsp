@@ -31,7 +31,7 @@ extern "C" {
 #include "../Components/Common/ts.h"
 
 /* Include TouchScreen component driver */
-#include "../Components/sitronix/sitronix.h"
+#include "../Components/chsc6540/chsc6540.h"
 
 /** @addtogroup BSP
   * @{
@@ -61,7 +61,7 @@ extern "C" {
 #define TS_ORIENTATION_LANDSCAPE_ROT180  3U
 
 /* TS I2C address */
-#define TS_I2C_ADDRESS              0xE0U
+#define TS_I2C_ADDRESS              (CHSC540_ADDRESS << 1)
 /**
   * @}
   */

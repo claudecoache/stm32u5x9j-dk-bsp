@@ -9,7 +9,7 @@
   --------------------------
    - This driver is used to drive the touch screen module of the STM32U5x9J-DISCOVERY
      board on the LCD mounted on MB1829A daughter board.
-     The touch screen driver IC is a SITRONIX.
+     The touch screen driver IC is a CHSC6540.
 
   2. Driver description:
   ---------------------
@@ -27,8 +27,8 @@
          coordinates).
        o Call BSP_TS_Set_Orientation() to change the current orientation.
          Call BSP_TS_Get_Orientation() to get the current orientation.
-       o Call BSP_TS_GetCapabilities() to get the SITRONIX capabilities.
-       o SITRONIX doesn't support multi touch and gesture features.
+       o Call BSP_TS_GetCapabilities() to get the CHSC6540 capabilities.
+       o CHSC6540 doesn't support multi touch and gesture features.
          BSP_TS_Get_MultiTouchState(), BSP_TS_GestureConfig() and
          BSP_TS_GetGestureId() functions will return BSP_ERROR_FEATURE_NOT_SUPPORTED.
 
@@ -96,7 +96,7 @@ IRQn_Type          Ts_IRQn[TS_INSTANCES_NBR] = {EXTI15_IRQn};
 /** @defgroup STM32U5x9J_DISCOVERY_TS_Private_FunctionPrototypes TS Private Function Prototypes
   * @{
   */
-static int32_t SITRONIX_Probe(uint32_t Instance);
+static int32_t CHSC6540_Probe(uint32_t Instance);
 
 /**
   * @}
@@ -122,7 +122,7 @@ int32_t BSP_TS_Init(uint32_t Instance, TS_Init_t *TS_Init)
   else
   {
     /* Probe the TS driver */
-    if (SITRONIX_Probe(Instance) != BSP_ERROR_NONE)
+    if (CHSC6540_Probe(Instance) != BSP_ERROR_NONE)
     {
       status = BSP_ERROR_COMPONENT_FAILURE;
     }
@@ -316,7 +316,7 @@ int32_t BSP_TS_GetState(uint32_t Instance, TS_State_t *TS_State)
   }
   else
   {
-    SITRONIX_State_t state;
+    CHSC6540_State_t state;
 
     /* Get each touch coordinates */
     if (Ts_Drv[Instance]->GetState(Ts_CompObj[Instance], &state) < 0)
@@ -325,8 +325,8 @@ int32_t BSP_TS_GetState(uint32_t Instance, TS_State_t *TS_State)
     }/* Check and update the number of touches active detected */
     else if (state.TouchDetected != 0U)
     {
-      x_oriented = /*Ts_Ctx[Instance].MaxX -*/ state.TouchX;
-      y_oriented = /*Ts_Ctx[Instance].MaxY -*/ state.TouchY;
+      x_oriented = /*Ts_Ctx[Instance].MaxX -*/ state.Touch1X;
+      y_oriented = /*Ts_Ctx[Instance].MaxY -*/ state.Touch1Y;
 
       /* Apply boundary */
       TS_State->TouchX = (x_oriented * Ts_Ctx[Instance].Width) / (Ts_Ctx[Instance].MaxX);
@@ -509,15 +509,15 @@ void BSP_TS_IRQHandler(uint32_t Instance)
   * @{
   */
 /**
-  * @brief  Probe the SITRONIX TS driver.
+  * @brief  Probe the CHSC6540 TS driver.
   * @param  Instance TS Instance.
   * @retval BSP status.
   */
-static int32_t SITRONIX_Probe(uint32_t Instance)
+static int32_t CHSC6540_Probe(uint32_t Instance)
 {
   int32_t                  status;
-  SITRONIX_IO_t              IOCtx;
-  static SITRONIX_Object_t SITRONIXObj;
+  CHSC6540_IO_t            IOCtx;
+  static CHSC6540_Object_t CHSC6540Obj;
 
   /* Configure the TS driver */
   IOCtx.Address     = TS_I2C_ADDRESS;
@@ -528,14 +528,14 @@ static int32_t SITRONIX_Probe(uint32_t Instance)
   IOCtx.ReadData    = BSP_I2C5_Recv;
   IOCtx.GetTick     = BSP_GetTick;
 
-  if (SITRONIX_RegisterBusIO(&SITRONIXObj, &IOCtx) != SITRONIX_OK)
+  if (CHSC6540_RegisterBusIO(&CHSC6540Obj, &IOCtx) != CHSC6540_OK)
   {
     status = BSP_ERROR_BUS_FAILURE;
   }
   else
   {
-    Ts_CompObj[Instance] = &SITRONIXObj;
-    Ts_Drv[Instance]     = (TS_Drv_t *) &SITRONIX_TS_Driver;
+    Ts_CompObj[Instance] = &CHSC6540Obj;
+    Ts_Drv[Instance]     = (TS_Drv_t *) &CHSC6540_TS_Driver;
     if (Ts_Drv[Instance]->Init(Ts_CompObj[Instance]) < 0)
     {
       status = BSP_ERROR_COMPONENT_FAILURE;
